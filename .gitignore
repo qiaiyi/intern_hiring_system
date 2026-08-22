@@ -1,0 +1,13 @@
+# 虚拟环境
+.venv/
+venv/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 环境变量
+.env
+
+# 日志文件
+*.log
