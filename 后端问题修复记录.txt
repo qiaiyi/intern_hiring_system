@@ -1,0 +1,211 @@
+============================================================
+实习招聘系统 —— 后端问题修复记录
+============================================================
+日期：2026-08-26
+说明：本文记录本次代码审查中发现的问题、问题原因与解决方法，
+      每处修改均在对应代码文件中用注释做了标注（形如 【修复】/【新增】/【清理】/【重构】）。
+
+------------------------------------------------------------
+问题 1（P0 · 严重 bug）：缺少 sub 的 JWT 会导致 500 错误
+------------------------------------------------------------
+【文件】dependencies.py  get_current_user 函数
+
+【问题描述】
+  解析 JWT 时使用 int(payload.get("sub"))，当 token 合法但缺少 "sub"
+  字段时，int(None) 会抛出 TypeError。而 except 只捕获了 (JWTError, ValueError)，
+  TypeError 未被捕获，最终返回 500 内部错误，而不是应有的 401 未认证。
+
+【问题原因】
+  - payload.get("sub") 在字段缺失时返回 None
+  - int(None) 抛 TypeError
+  - TypeError 不在异常捕获范围内
+
+【解决方法】
+  先判断 sub 是否为 None，为 None 时抛出 401 异常；否则再 int(sub) 转换。
+
+  修改前：
+      user_id = int(payload.get("sub"))
+      if user_id is None:
+          raise credentials_exception
+
+  修改后：
+      sub = payload.get("sub")
+      if sub is None:
+          raise credentials_exception
+      user_id = int(sub)
+
+【验证】
+  用无 sub 字段的合法 token 请求受保护接口，返回 401（修复前为 500）。
+
+
+------------------------------------------------------------
+问题 2（P2 · 设计一致性）：Application.status 使用字符串 + 手动校验
+------------------------------------------------------------
+【文件】schemas.py、applications.py
+
+【问题描述】
+  投递状态 status 在 models.py 中为字符串列，schema 中也是 str，合法性校验
+  散落在 applications.py 里通过手动比对白名单实现，与 Role 字段使用枚举的
+  规范写法不一致，且校验逻辑分散、易遗漏。
+
+【问题原因】
+  - 状态字段未像 Role 一样定义为枚举
+  - 合法性校验依赖手写 if 判断，而非类型系统自动完成
+
+【解决方法】
+  1. 在 schemas.py 新增 ApplicationStatus(str, Enum) 枚举：
+     applied / screening / interview / offer / rejected
+
+  2. ApplicationOut.status 与 ApplicationStatusUpdate.status 的类型
+     由 str 改为 ApplicationStatus，非法值由 Pydantic 自动拦截（返回 422）。
+
+  3. 删除 applications.py 中的手动白名单校验：
+     原：
+        allowed_statuses = {"screening", "interview", "offer", "rejected"}
+        if status_data.status not in allowed_statuses:
+            raise HTTPException(400, "无效的状态值")
+        application.status = status_data.status
+     改为：
+        application.status = status_data.status.value
+
+  4. 补充 field_validator 校验器：HR 不能把状态改回 applied（applied 是投递时的初始态），
+     保持原有业务语义。
+
+【验证】
+  - 传入 "screening" 正常通过
+  - 传入 "xxx"（非法枚举值）返回 422
+  - 传入 "applied" 被校验器拦截返回 422
+
+
+------------------------------------------------------------
+问题 3（P2 · 代码整洁）：auth.py 存在恒为真的死代码
+------------------------------------------------------------
+【文件】auth.py  register 函数
+
+【问题描述】
+  role=user_data.role if user_data.role else "student" 中的 if 条件恒为真，
+  因为 UserCreate.role 已有默认值 Role.student，永远不会为 falsy。
+
+【问题原因】
+  冗余的条件表达式，是早期无默认值时遗留的代码。
+
+【解决方法】
+  简化为 role=user_data.role.value（直接取枚举的字符串值写入数据库）。
+
+  修改前：
+      role=user_data.role if user_data.role else "student"
+  修改后：
+      role=user_data.role.value
+
+【验证】
+  注册 role=hr 时数据库正确写入 "hr"（测试日志已确认 INSERT 值为 'hr'）。
+
+
+------------------------------------------------------------
+问题 4（P1 · 安全性/可维护性）：缺少 CORS 中间件
+------------------------------------------------------------
+【文件】main.py
+
+【问题描述】
+  项目后续接入前端时，浏览器跨域请求会被同源策略拦截，导致前端无法调用后端接口。
+
+【问题原因】
+  未配置 CORSMiddleware。
+
+【解决方法】
+  在 main.py 中挂载 CORSMiddleware，允许跨域。上线前需按实际情况收紧
+  allow_origins 白名单。
+
+  注意：allow_credentials=True 时，allow_origins 不能使用通配符 "*"，
+  需改为具体的前端域名（本项目当前无前端，暂用 "*" 以便开发）。
+
+【验证】
+  应用可正常启动，路由正常注册。
+
+
+------------------------------------------------------------
+问题 5（P1 · 安全性）：config.py 关键配置缺少启动校验
+------------------------------------------------------------
+【文件】config.py
+
+【问题描述】
+  DATABASE_URL 和 SECRET_KEY 直接使用 os.environ.get()，未配置时会得到 None：
+  - DATABASE_URL 为 None 会在创建引擎时崩溃（且报错信息不直观）
+  - SECRET_KEY 为 None 会让 JWT 签名形同虚设，存在安全隐患
+
+【问题原因】
+  关键配置缺少 fail-fast 校验。
+
+【解决方法】
+  模块加载时对两个变量做非空校验，缺失则抛出清晰的 RuntimeError 提示。
+
+【验证】
+  无 .env 时启动会立即报出明确的缺失提示；有 .env 时正常加载。
+
+
+------------------------------------------------------------
+问题 6（P2 · 功能完善）：列表接口缺少分页
+------------------------------------------------------------
+【文件】schemas.py、pagination.py（新增）、jobs.py、applications.py
+
+【问题描述】
+  list_jobs / my_applications / list_job_applications 三个列表接口
+  均一次性返回全部数据（select(...).scalars().all()），数据量增大后：
+  - 接口响应体积大、耗时高，前端加载慢
+  - 数据库一次拉取全表，内存与连接占用高
+  - 缺少统一的翻页约定，前端无法按页请求
+
+【问题原因】
+  列表接口只做全量查询，未提供分页查询参数，也未做返回结构上的分页约定。
+
+【解决方法】
+  1. 在 schemas.py 新增分页查询参数模型 PageParams（page / page_size，
+     默认 1 / 10），用 field_validator 做边界校验（page>=1，1<=page_size<=100），
+     并暴露 offset 属性 = (page-1)*page_size；非法值由 Pydantic 拦截返回 422。
+
+  2. 在 schemas.py 新增泛型分页响应结构 Page[T]，字段为
+     items / total / page / page_size / pages，各列表接口统一使用它作为返回结构。
+
+  3. 新增 pagination.py 提供两个复用函数，避免每个接口重复写 count + offset/limit：
+     - paginate(db_session, stmt, params)：对任意 select 语句先 count 总数，
+       再 offset/limit 取当前页，返回 (items, total)
+     - build_page(items, total, params)：组装成 Page 响应字典（pages 用 ceil 向上取整）
+
+  4. 三个接口的响应类型由 List[X] 改为 Page[X]，签名中加入
+     params: PageParams = Depends() 作为查询参数，内部调用 paginate/build_page。
+
+  修改前（以 list_jobs 为例）：
+      @router.get("", response_model=List[JobOut])
+      async def list_jobs(db_session: AsyncSession = Depends(get_db_session)):
+          result = await db_session.execute(select(Job).order_by(Job.created_at.desc()))
+          return result.scalars().all()
+
+  修改后：
+      @router.get("", response_model=Page[JobOut])
+      async def list_jobs(
+          params: PageParams = Depends(),
+          db_session: AsyncSession = Depends(get_db_session)
+      ):
+          stmt = select(Job).order_by(Job.created_at.desc())
+          jobs, total = await paginate(db_session, stmt, params)
+          return build_page(jobs, total, params)
+
+【验证】
+  - 分页参数校验：page=0 → 422；page_size=101 → 422；page_size=0 → 422；
+    page=2&page_size=5 → offset=5，正常通过。
+  - OpenAPI 文档中三个 GET 接口的 query 参数包含 page / page_size，
+    响应结构为 items/total/page/page_size/pages，字段齐全且 items 元素类型正确
+    （Page_JobOut_ / Page_ApplicationOut_）。
+  - 应用可正常启动（虚拟环境 .venv 下导入 main 通过，路由正常注册）。
+
+
+============================================================
+待办（本次未改，建议后续完善）
+============================================================
+- [x] database.py: echo=True 建议改为环境变量控制，生产环境避免打印 SQL
+- [x] 列表接口（list_jobs / my_applications / list_job_applications）加分页参数
+- [ ] 补充 pytest + httpx 单元测试
+- [ ] 提供 .env.example 示例文件
+- [ ] register 增加密码强度校验
+- [ ] requirements.txt 锁定版本号
+- [ ] CORS 上线前收紧 allow_origins 白名单
