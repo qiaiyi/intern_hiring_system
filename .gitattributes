@@ -1,0 +1,6 @@
+# 所有文本文件自动规范化行尾
+* text=auto
+
+# 明确指定这些文件使用 LF
+*.py text eol=lf
+*.txt text eol=lf

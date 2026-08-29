@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -46,9 +48,9 @@ async def apply_job(
 # 学生查看自己的投递记录（支持分页）
 @router.get("/my/applications", response_model=Page[ApplicationOut])
 async def my_applications(
-    params: PageParams = Depends(),
+    params: Annotated[PageParams, Query()],
     db_session: AsyncSession = Depends(get_db_session),
-    current_user: User = Depends(require_role("student"))
+    current_user: User = Depends(require_role("student")),
 ):
     stmt = (
         select(Application)
@@ -62,9 +64,9 @@ async def my_applications(
 @router.get("/jobs/{job_id}/applications", response_model=Page[ApplicationOut])
 async def list_job_applications(
     job_id: int,
-    params: PageParams = Depends(),
+    params: Annotated[PageParams, Query()],
     db_session: AsyncSession = Depends(get_db_session),
-    current_user: User = Depends(require_role("hr"))
+    current_user: User = Depends(require_role("hr")),
 ):
     # 确认岗位存在且属于当前 HR
     job_result = await db_session.execute(select(Job).where(Job.id == job_id))

@@ -199,12 +199,56 @@
   - 应用可正常启动（虚拟环境 .venv 下导入 main 通过，路由正常注册）。
 
 
+------------------------------------------------------------
+问题 7（P1 · 严重 bug）：分页参数非法值返回 500 而非 422
+------------------------------------------------------------
+【文件】jobs.py、applications.py（schemas.py 的 PageParams 不变）
+
+【问题描述】
+  三个列表接口用 params: PageParams = Depends() 声明分页查询参数。
+  传入非法分页值（page=0 / page_size=101 等）时，PageParams 的
+  field_validator 抛出的 pydantic ValidationError 不会被 FastAPI 捕获，
+  而是作为未处理异常向上抛出，最终返回 500 内部错误，而非应有的 422。
+  该行为与问题 6 的【验证】结论（"非法值返回 422"）不符。
+
+【问题原因】
+  Depends() 会把 Pydantic 模型当作普通可调用依赖：solve_dependencies 中
+  通过 run_in_threadpool(call, **values) 直接实例化 PageParams，模型构造
+  抛出的 ValidationError 不在 request_params_to_args 收集 errors 的范围内
+  （后者只收集字段级解析错误），故无法转换为 RequestValidationError → 422。
+
+【解决方法】
+  让 FastAPI 把模型作为"查询参数模型"解析：三个接口的参数声明由
+  params: PageParams = Depends() 改为 params: Annotated[PageParams, Query()]，
+  校验失败即被捕获并返回 422。同时补充 typing.Annotated 与 fastapi.Query 导入；
+  因该参数不再有默认值，调整到签名首位。
+
+  修改前（list_jobs 为例）：
+      async def list_jobs(
+          params: PageParams = Depends(),
+          db_session: AsyncSession = Depends(get_db_session)
+      ):
+
+  修改后：
+      async def list_jobs(
+          params: Annotated[PageParams, Query()],
+          db_session: AsyncSession = Depends(get_db_session),
+      ):
+
+  my_applications、list_job_applications 同步修改。
+
+【验证】
+  补充 pytest + httpx 测试（tests/ 目录，44 个用例全部通过）：
+  page=0 / page=-1 / page_size=0 / page_size=-5 / page_size=101 均返回 422
+  （修复前这些请求抛未捕获异常，实际为 500）。
+
+
 ============================================================
 待办（本次未改，建议后续完善）
 ============================================================
 - [x] database.py: echo=True 建议改为环境变量控制，生产环境避免打印 SQL
 - [x] 列表接口（list_jobs / my_applications / list_job_applications）加分页参数
-- [ ] 补充 pytest + httpx 单元测试
+- [x] 补充 pytest + httpx 单元测试
 - [ ] 提供 .env.example 示例文件
 - [ ] register 增加密码强度校验
 - [ ] requirements.txt 锁定版本号

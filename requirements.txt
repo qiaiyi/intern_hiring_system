@@ -6,3 +6,9 @@ bcrypt
 python-jose[cryptography]
 pydantic
 python-dotenv
+
+# 测试依赖（tests/ 目录，运行 pytest）
+pytest
+pytest-asyncio
+httpx
+aiosqlite

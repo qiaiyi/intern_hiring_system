@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -31,8 +33,8 @@ async def create_job(
 # 获取岗位列表（所有人可看，支持分页）
 @router.get("", response_model=Page[JobOut])
 async def list_jobs(
-    params: PageParams = Depends(),
-    db_session: AsyncSession = Depends(get_db_session)
+    params: Annotated[PageParams, Query()],
+    db_session: AsyncSession = Depends(get_db_session),
 ):
     stmt = select(Job).order_by(Job.created_at.desc())
     jobs, total = await paginate(db_session, stmt, params)
