@@ -6,11 +6,18 @@ def auth_headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def register_user(client, username: str, password: str, role: str | None = None):
+async def register_user(
+    client, username: str, password: str, role: str | None = None,
+    name: str | None = None, email: str | None = None,
+):
     """注册用户。role 为 None 时走 schema 默认值（student）。"""
     payload = {"username": username, "password": password}
     if role is not None:
         payload["role"] = role
+    if name is not None:
+        payload["name"] = name
+    if email is not None:
+        payload["email"] = email
     return await client.post("/api/auth/register", json=payload)
 
 
@@ -28,9 +35,12 @@ async def get_token(client, username: str, password: str) -> str:
     return resp.json()["access_token"]
 
 
-async def create_user(client, username: str, password: str = "password123", role: str = "student"):
+async def create_user(
+    client, username: str, password: str = "password123", role: str = "student",
+    name: str | None = None, email: str | None = None,
+):
     """注册并登录，返回 (access_token, 注册返回的用户信息)。"""
-    resp = await register_user(client, username, password, role)
+    resp = await register_user(client, username, password, role, name, email)
     assert resp.status_code == 201, resp.text
     token = await get_token(client, username, password)
     return token, resp.json()

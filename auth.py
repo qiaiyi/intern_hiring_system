@@ -40,6 +40,9 @@ async def register(user_data: UserCreate, db_session: AsyncSession = Depends(get
         password_hash=hash_password(user_data.password),
         # 【清理】UserCreate.role 已带 Role.student 默认值，恒为真，直接取枚举的字符串值即可
         role=user_data.role.value,
+        # 【新增】写入可选的基础资料字段
+        name=user_data.name,
+        email=user_data.email,
     )
     db_session.add(user)
     await db_session.commit()

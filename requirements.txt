@@ -6,6 +6,7 @@ bcrypt==5.0.0
 python-jose[cryptography]==3.5.0
 pydantic==2.13.4
 python-dotenv==1.2.3
+python-multipart==0.0.32
 
 # 测试依赖（tests/ 目录，运行 pytest）
 pytest==9.1.1

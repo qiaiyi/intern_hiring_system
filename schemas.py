@@ -26,6 +26,8 @@ class UserCreate(BaseModel):
     username: str
     password: str
     role: Role = Role.student
+    name: Optional[str] = None   # 姓名（可选）
+    email: Optional[str] = None  # 邮箱（可选）
 
     # 【新增】密码强度校验：至少 8 位，且同时包含字母和数字
     @field_validator("password")
@@ -48,7 +50,9 @@ class UserLogin(BaseModel):
 class UserOut(BaseModel):
     id: int
     username: str
-    role: Role 
+    role: Role
+    name: Optional[str] = None
+    email: Optional[str] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)#优先通过对象的属性（.属性名）而非字典键（['键名']）来读取值
@@ -76,12 +80,27 @@ class JobOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 # 投递相关
+# 【新增】投递列表里嵌套展示的岗位 / 学生摘要，避免只返回裸 ID
+class JobSummary(BaseModel):
+    id: int
+    title: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+class StudentSummary(BaseModel):
+    id: int
+    username: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
 class ApplicationOut(BaseModel):
     id: int
-    job_id: int
-    student_id: int
     status: ApplicationStatus
     created_at: datetime
+    job: JobSummary           # 学生侧：投的是哪个岗位
+    student: StudentSummary   # HR 侧：投递人是谁
 
     model_config = ConfigDict(from_attributes=True)
 

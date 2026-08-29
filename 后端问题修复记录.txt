@@ -391,13 +391,112 @@
   - pytest 全量 47 用例通过（CORS 默认来源不影响测试客户端 ASGI 直连）
 
 
-============================================================
-待办（本次未改，建议后续完善）
-============================================================
-- [x] database.py: echo=True 建议改为环境变量控制，生产环境避免打印 SQL
-- [x] 列表接口（list_jobs / my_applications / list_job_applications）加分页参数
-- [x] 补充 pytest + httpx 单元测试
-- [x] 提供 .env.example 示例文件
-- [x] register 增加密码强度校验
-- [x] requirements.txt 锁定版本号
-- [x] CORS 上线前收紧 allow_origins 白名单
+------------------------------------------------------------
+问题 12（P0 · 严重 bug）：requirements.txt 漏列 python-multipart
+------------------------------------------------------------
+【文件】requirements.txt
+
+【问题描述】
+  auth.py 的 login 接口使用 OAuth2PasswordRequestForm（基于 FastAPI 的 Form），
+  解析表单数据依赖 python-multipart。该依赖此前既不在锁定前的 requirements.txt
+  中，也不在锁定后的版本中。干净环境执行 pip install -r requirements.txt 后，
+  调用 /api/auth/login 会抛出 RuntimeError：
+    "Form data requires 'python-multipart' to be installed"
+  导致登录功能直接不可用。
+
+【问题原因】
+  python-multipart 是 FastAPI 解析表单（Form）的可选运行时依赖，并非
+  fastapi 的强制依赖，手动整理 requirements.txt 时被遗漏；本机能跑
+  是因为该包恰好已安装在虚拟环境中（pip freeze 可见），掩盖了缺失。
+
+【解决方法】
+  requirements.txt 补充 python-multipart==0.0.32（与当前虚拟环境一致）。
+
+【验证】
+  pip freeze 中 python-multipart==0.0.32；新增依赖后 pytest 全量 47 用例通过。
+
+
+------------------------------------------------------------
+问题 13（P1 · 并发安全/性能）：投递存在竞态，且外键列缺索引
+------------------------------------------------------------
+【文件】models.py、applications.py
+
+【问题描述】
+  1. 重复投递校验存在竞态（TOCTOU）：apply_job 先 SELECT 查重再 INSERT，
+     两个并发请求都能通过查询（都查到"未投递"），随后都执行 INSERT，
+     导致同一学生对同一岗位产生两条投递记录。
+  2. Application.job_id / student_id 是 my_applications、list_job_applications
+     两个列表接口的过滤列，但未建索引；MySQL InnoDB 会对外键自动建索引，
+     但 SQLite（测试库）不会，且不应依赖数据库隐式行为。
+
+【问题原因】
+  - 应用层查重不是原子操作，无法在多请求并发下保证唯一性；
+  - 高频过滤外键列未显式建索引。
+
+【解决方法】
+  1. models.py 给 Application 增加 (job_id, student_id) 唯一约束与两个外键列索引：
+
+        __table_args__ = (
+            UniqueConstraint("job_id", "student_id", name="uq_application_job_student"),
+        )
+        job_id = Column(..., index=True)
+        student_id = Column(..., index=True)
+
+  2. applications.py 保留原有的查重 SELECT 作为"快速路径"（命中即返回友好文案），
+     但把唯一约束作为并发场景的最终兜底：INSERT 撞约束抛 IntegrityError 时，
+     先 rollback 再返回 400，避免 500：
+
+        try:
+            await db_session.commit()
+        except IntegrityError:
+            await db_session.rollback()
+            raise HTTPException(status_code=400, detail="你已投递过该岗位")
+
+  说明：MySQL 中 create_all 不会修改已存在的表，需删表重建才能让新约束生效。
+
+【验证】
+  - 新增并发竞态测试 test_apply_duplicate_race：asyncio.gather 并发两次投递，
+    结果恰为一个 201 + 一个 400，且 my_applications 总数仍为 1；
+  - tests/ 目录 48 个用例全部通过；
+  - MySQL 重建后 SHOW CREATE TABLE 确认存在
+    UNIQUE KEY uq_application_job_student (job_id, student_id)
+    及 ix_application_job_id / ix_application_student_id 两个索引。
+
+
+------------------------------------------------------------
+问题 14（P1 · 功能完善）：投递列表只返回裸 ID，缺少关联对象信息
+------------------------------------------------------------
+【文件】models.py、schemas.py、applications.py、auth.py
+
+【问题描述】
+  ApplicationOut 此前仅返回 job_id / student_id 两个数字：
+  - 学生查 my_applications 只拿到 job_id，无法直接得知岗位标题；
+  - HR 查 list_job_applications 只拿到 student_id，无法得知投递人是谁、
+    叫什么、如何联系，招聘闭环断裂。
+  同时 User 模型只有 username / role，缺少姓名、邮箱等真实业务字段。
+
+【问题原因】
+  - 关联对象未建立 relationship，响应 schema 也未嵌套摘要；
+  - User 模型字段极简，无法承载"投递人是谁"这一信息。
+
+【解决方法】
+  1. models.py 打开并补齐 relationship：
+       Job.hr / Job.applications；Application.job / Application.student；
+     User 新增 name、email 两个可空列（兼容已有数据）。
+  2. schemas.py 新增 JobSummary（id/title）、StudentSummary
+     （id/username/name/email）两个摘要模型；ApplicationOut 由
+     job_id / student_id 改为嵌套 job: JobSummary、student: StudentSummary；
+     UserCreate 增加可选 name / email；UserOut 增加 name / email。
+  3. applications.py 在两处列表查询加 options(selectinload(...)) 预加载
+     job / student 关系，并新增 _get_application_with_relations 辅助函数，
+     供 apply_job / update_application_status 返回时重新查询已预加载的对象。
+     说明：异步会话默认禁用懒加载，不预加载会在序列化时抛 MissingGreenlet。
+  4. auth.py 注册时写入 name / email。
+
+【验证】
+  - 新增 test_list_job_applications_includes_student_info：
+    HR 查投递列表能读到投递人的 username/name/email；
+  - test_apply_success 断言响应含 job.id / job.title / student.username；
+  - tests/ 目录 49 个用例全部通过；
+  - MySQL 重建后 SHOW COLUMNS FROM user 确认新增 name / email 两列。
+
