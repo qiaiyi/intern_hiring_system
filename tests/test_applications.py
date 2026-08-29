@@ -3,12 +3,12 @@ import helpers
 
 
 async def _hr(client, username="boss"):
-    token, _ = await helpers.create_user(client, username, "pass123", role="hr")
+    token, _ = await helpers.create_user(client, username, "password123", role="hr")
     return token
 
 
 async def _student(client, username="stu"):
-    token, _ = await helpers.create_user(client, username, "pass123", role="student")
+    token, _ = await helpers.create_user(client, username, "password123", role="student")
     return token
 
 

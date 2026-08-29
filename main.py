@@ -7,6 +7,7 @@ import models   # 确保模型被加载，以便建表
 from auth import router as auth_router
 from jobs import router as jobs_router
 from applications import router as applications_router
+from config import CORS_ORIGINS
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -19,10 +20,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="实习招聘管理系统", lifespan=lifespan)
 
-# 【新增】允许跨域，供后续前端调用；上线前按需收紧 allow_origins 白名单
+# 【新增】允许跨域，供后续前端调用；来源白名单由环境变量 CORS_ORIGINS 控制
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

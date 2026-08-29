@@ -28,7 +28,7 @@ async def get_token(client, username: str, password: str) -> str:
     return resp.json()["access_token"]
 
 
-async def create_user(client, username: str, password: str = "pass123", role: str = "student"):
+async def create_user(client, username: str, password: str = "password123", role: str = "student"):
     """注册并登录，返回 (access_token, 注册返回的用户信息)。"""
     resp = await register_user(client, username, password, role)
     assert resp.status_code == 201, resp.text

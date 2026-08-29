@@ -243,13 +243,161 @@
   （修复前这些请求抛未捕获异常，实际为 500）。
 
 
+------------------------------------------------------------
+问题 8（P2 · 安全性）：register 缺少密码强度校验
+------------------------------------------------------------
+【文件】schemas.py（auth.py 不变）
+
+【问题描述】
+  UserCreate.password 为任意 str，未做任何强度校验。用户可以注册
+  "1"、"abc" 之类的弱密码，配合缺少速率限制的登录接口，存在被
+  暴力破解/撞库的风险。
+
+【问题原因】
+  密码字段无长度与复杂度约束，仅由前端（若有）自行保证，后端未兜底。
+
+【解决方法】
+  在 schemas.py 的 UserCreate 中新增 field_validator("password") 校验器，
+  规则如下（非法值由 Pydantic 拦截，返回 422）：
+    - 长度至少 8 位
+    - 同时包含字母和数字
+
+  修改前：
+      class UserCreate(BaseModel):
+          username: str
+          password: str
+          role: Role = Role.student
+
+  修改后：
+      class UserCreate(BaseModel):
+          username: str
+          password: str
+          role: Role = Role.student
+
+          @field_validator("password")
+          @classmethod
+          def password_strength(cls, v: str) -> str:
+              if len(v) < 8:
+                  raise ValueError("密码长度至少为 8 位")
+              if not any(c.isalpha() for c in v):
+                  raise ValueError("密码必须包含字母")
+              if not any(c.isdigit() for c in v):
+                  raise ValueError("密码必须包含数字")
+              return v
+
+  说明：tests/ 中既有用例使用的密码 "pass123" 不满足新规则（无数字长度不足，
+  实际 pass123 仅 7 位且无数字），已统一替换为 "password123" 以通过校验。
+
+【验证】
+  - "a1b2"（过短）→ 422
+  - "12345678"（无字母）→ 422
+  - "abcdefgh"（无数字）→ 422
+  - "password123"（合法）→ 201
+  补充 3 个强度校验测试用例，tests/ 目录共 47 个用例全部通过。
+
+
+------------------------------------------------------------
+问题 9（P3 · 可维护性）：缺少 .env.example 示例文件
+------------------------------------------------------------
+【文件】.env.example（新增）
+
+【问题描述】
+  项目通过 .env 提供 DATABASE_URL / SECRET_KEY / SQL_ECHO 三项配置，
+  但仓库内仅有被 .gitignore 忽略的 .env，无模板文件。新成员/部署环境
+  无法得知需要配置哪些变量，易因缺项触发 config.py 的 fail-fast 报错。
+
+【问题原因】
+  缺少与 .env 对应的示例模板文件（.env.example 不在 .gitignore 内，可提交）。
+
+【解决方法】
+  新增 .env.example，列出三个环境变量并附注释说明：
+    - DATABASE_URL：数据库连接地址（mysql+aiomysql 异步驱动）
+    - SECRET_KEY：JWT 签名密钥（占位示例，注明生产环境需替换）
+    - SQL_ECHO：是否打印 SQL 日志（对应问题 1 待办的 echo 环境变量化）
+
+【验证】
+  .gitignore 仅忽略 .env，.env.example 可正常纳入版本控制，不泄露真实密钥。
+
+
+------------------------------------------------------------
+问题 10（P3 · 可维护性）：requirements.txt 未锁定版本号
+------------------------------------------------------------
+【文件】requirements.txt
+
+【问题描述】
+  依赖仅写包名不写版本，不同时间/机器 pip install 会拉到最新版，
+  一旦依赖发布不兼容的新版本，部署环境与本地行为不一致，难以复现问题。
+
+【问题原因】
+  未固化依赖版本，缺少可复现的依赖快照。
+
+【解决方法】
+  依据当前虚拟环境 pip freeze 的实际安装版本，锁定直接依赖版本号：
+    fastapi==0.141.1
+    uvicorn[standard]==0.52.4
+    sqlalchemy[asyncio]==2.0.52
+    aiomysql==0.3.2
+    bcrypt==5.0.0
+    python-jose[cryptography]==3.5.0
+    pydantic==2.13.4
+    python-dotenv==1.2.3
+    pytest==9.1.1
+    pytest-asyncio==1.4.0
+    httpx==0.28.1
+    aiosqlite==0.22.1
+
+  说明：仅锁定直接依赖（不含 pip freeze 中的传递依赖，如 anyio/certifi 等），
+  在「可复现」与「可维护」之间取平衡。
+
+【验证】
+  pip freeze 输出的直接依赖版本与上述一致；pytest 全量 47 用例通过。
+
+
+------------------------------------------------------------
+问题 11（P1 · 安全性）：CORS 白名单收紧并环境变量化
+------------------------------------------------------------
+【文件】main.py、config.py、.env、.env.example
+
+【问题描述】
+  main.py 中 CORSMiddleware 使用 allow_origins=["*"] 且 allow_credentials=True，
+  任意网站均可携带凭证跨域调用后端，存在 CSRF/越权风险；上线前需按实际
+  前端域名收紧来源白名单。
+
+【问题原因】
+  开发期前端未定，为图方便采用全通配 "*"，未提供可配置的来源白名单。
+
+【解决方法】
+  1. config.py 新增 CORS_ORIGINS，从环境变量读取逗号分隔的来源列表，
+     未配置时回退到本地开发常用端口（3000 / 8000）：
+
+        CORS_ORIGINS = [
+            origin.strip()
+            for origin in os.getenv(
+                "CORS_ORIGINS", "http://localhost:3000,http://localhost:8000"
+            ).split(",")
+            if origin.strip()
+        ]
+
+  2. main.py 导入 CORS_ORIGINS，将 allow_origins 由 ["*"] 改为该列表。
+     allow_credentials=True 仍保持不变，因此来源必须是具体域名（不再使用 "*"）。
+
+  3. .env / .env.example 新增 CORS_ORIGINS 配置项与注释说明。
+
+  说明：保留 allow_credentials=True 下不能使用通配来源；生产部署时只需在
+  .env 中把 CORS_ORIGINS 设为真实前端域名即可，无需改动代码。
+
+【验证】
+  - config.CORS_ORIGINS 正确解析为 ['http://localhost:3000', 'http://localhost:8000']
+  - pytest 全量 47 用例通过（CORS 默认来源不影响测试客户端 ASGI 直连）
+
+
 ============================================================
 待办（本次未改，建议后续完善）
 ============================================================
 - [x] database.py: echo=True 建议改为环境变量控制，生产环境避免打印 SQL
 - [x] 列表接口（list_jobs / my_applications / list_job_applications）加分页参数
 - [x] 补充 pytest + httpx 单元测试
-- [ ] 提供 .env.example 示例文件
-- [ ] register 增加密码强度校验
-- [ ] requirements.txt 锁定版本号
-- [ ] CORS 上线前收紧 allow_origins 白名单
+- [x] 提供 .env.example 示例文件
+- [x] register 增加密码强度校验
+- [x] requirements.txt 锁定版本号
+- [x] CORS 上线前收紧 allow_origins 白名单

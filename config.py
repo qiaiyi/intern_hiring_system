@@ -16,3 +16,13 @@ if not SECRET_KEY:
     raise RuntimeError("缺少环境变量 SECRET_KEY，请在 .env 中配置 JWT 签名密钥")
 
 SQL_ECHO = os.getenv("SQL_ECHO", "false").lower() == "true"
+
+# 【新增】CORS 允许的来源白名单：逗号分隔的域名列表。
+# 未配置时回退到本地开发常用端口，生产环境必须显式配置真实前端域名。
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS", "http://localhost:3000,http://localhost:8000"
+    ).split(",")
+    if origin.strip()
+]

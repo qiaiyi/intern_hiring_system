@@ -4,3 +4,4 @@
 # 明确指定这些文件使用 LF
 *.py text eol=lf
 *.txt text eol=lf
+*.ini text eol=lf

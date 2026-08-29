@@ -25,7 +25,19 @@ class ApplicationStatus(str, Enum):
 class UserCreate(BaseModel):
     username: str
     password: str
-    role: Role = Role.student 
+    role: Role = Role.student
+
+    # 【新增】密码强度校验：至少 8 位，且同时包含字母和数字
+    @field_validator("password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("密码长度至少为 8 位")
+        if not any(c.isalpha() for c in v):
+            raise ValueError("密码必须包含字母")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("密码必须包含数字")
+        return v
 
 # 登录请求体
 class UserLogin(BaseModel):
