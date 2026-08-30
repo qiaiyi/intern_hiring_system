@@ -40,6 +40,32 @@ async def test_create_job_success(client):
     assert data["hr_id"] == 1
 
 
+async def test_create_duplicate_job_rejected(client):
+    """同一 HR 发布同名岗位应被数据库唯一约束拒绝（返回 400/409）。"""
+    token = await _hr(client)
+    headers = helpers.auth_headers(token)
+    first = await client.post("/api/jobs", json=_job_payload(), headers=headers)
+    assert first.status_code == 201
+
+    second = await client.post("/api/jobs", json=_job_payload(), headers=headers)
+    # 唯一约束冲突：MySQL 抛 IntegrityError → 需应用层转成 4xx
+    assert second.status_code in (400, 409)
+
+
+async def test_create_same_title_different_hr_allowed(client):
+    """不同 HR 可以发布同名岗位（唯一约束是 hr_id + title 组合）。"""
+    hr1 = await _hr(client, "boss_a")
+    hr2 = await _hr(client, "boss_b")
+    resp1 = await client.post(
+        "/api/jobs", json=_job_payload(), headers=helpers.auth_headers(hr1)
+    )
+    resp2 = await client.post(
+        "/api/jobs", json=_job_payload(), headers=helpers.auth_headers(hr2)
+    )
+    assert resp1.status_code == 201
+    assert resp2.status_code == 201
+
+
 async def test_list_jobs_empty(client):
     resp = await client.get("/api/jobs")
     assert resp.status_code == 200

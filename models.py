@@ -22,6 +22,11 @@ class User(Base):
 
 class Job(Base):
     __tablename__ = "job"
+    # 【新增】同一 HR 不能发布同名岗位：数据库唯一约束兜底并发场景，
+    # 与投递去重（uq_application_job_student）思路一致
+    __table_args__ = (
+        UniqueConstraint("hr_id", "title", name="uq_job_hr_title"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(100), nullable=False)

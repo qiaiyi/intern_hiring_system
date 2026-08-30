@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -19,6 +20,17 @@ async def create_job(
     db_session: AsyncSession = Depends(get_db_session),
     current_user: User = Depends(require_role("hr"))
 ):
+    # 【新增】发布前防重：同一 HR 不能发布同名岗位。
+    # 唯一约束 (hr_id, title) 是并发场景的最终兜底，这里先给常规重复提交一个友好提示。
+    existing = await db_session.execute(
+        select(Job).where(
+            Job.hr_id == current_user.id,
+            Job.title == job_data.title,
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="你已发布过同名岗位")
+
     job = Job(
         title=job_data.title,
         description=job_data.description,
@@ -26,7 +38,13 @@ async def create_job(
         hr_id=current_user.id,
     )
     db_session.add(job)
-    await db_session.commit()
+    # 【新增】并发下两个请求都通过上面的查询后，第二个 INSERT 会撞唯一约束
+    # uq_job_hr_title 抛 IntegrityError，这里捕获并回滚，避免 500，同时保证不重复入库。
+    try:
+        await db_session.commit()
+    except IntegrityError:
+        await db_session.rollback()
+        raise HTTPException(status_code=400, detail="你已发布过同名岗位")
     await db_session.refresh(job)
     return job
 
