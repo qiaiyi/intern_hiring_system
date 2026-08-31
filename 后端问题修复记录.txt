@@ -500,3 +500,203 @@
   - tests/ 目录 49 个用例全部通过；
   - MySQL 重建后 SHOW COLUMNS FROM user 确认新增 name / email 两列。
 
+
+
+------------------------------------------------------------
+改进 15（架构改进）：create_all 替换为 Alembic 数据库迁移
+------------------------------------------------------------
+日期：2026-08-31
+【文件】migrations/（新增目录）、alembic.ini（新增）、migrations/env.py、
+        migrations/versions/02767e84e64c_baseline_user_job_application_tables.py、
+        main.py、tests/conftest.py、requirements.txt、README.md
+        （代码中相关修改均以 【Alembic迁移】 注释标识）
+
+【问题描述】
+  此前应用启动时通过 lifespan 中的 Base.metadata.create_all 自动建表：
+  - create_all 只能"从零建表"，不会修改已有表结构；模型改动（如问题 13/14
+    加的唯一约束、新列）必须手动 DROP TABLE 重建，已有数据全部丢失；
+  - 表结构无版本记录，多环境（开发/测试/生产）之间无法保证 schema 一致，
+    也无法追溯某次结构变更是谁、何时、为什么引入；
+  - 无法回滚：结构改错后没有标准的降级手段。
+
+【问题原因】
+  缺少数据库迁移（schema migration）机制，表结构演进依赖"删库重建"。
+
+【解决方法】
+  1. 引入 Alembic（异步模板）：alembic init -t async migrations，与项目的
+     aiomysql 异步驱动保持一致；依赖锁定 alembic==1.19.1。
+
+  2. migrations/env.py：
+     - 连接串不在 alembic.ini 中写死（避免密码入库），改为从 config.DATABASE_URL
+       读取并注入（密码含 % 时转义）；
+     - target_metadata 指向 database.Base.metadata，并 import models 注册全部模型，
+       使 autogenerate 能对比出完整表结构差异。
+     注意：alembic.ini 需保持纯 ASCII——Alembic 用系统区域编码（中文 Windows
+     为 GBK）读取该文件，写中文注释会导致 UnicodeDecodeError。
+
+  3. 生成基线迁移 02767e84e64c（user/job/application 三张表，含
+     uq_job_hr_title、uq_application_job_student 两个唯一约束与全部索引）。
+     人工校订一处：server_default 由 SQLite 反射出的 '(CURRENT_TIMESTAMP)'
+     统一改为 'CURRENT_TIMESTAMP'，保证在 MySQL 5.7+ 合法，且与 create_all
+     在 MySQL 上的产物一致，避免后续 autogenerate 误报差异。
+
+  4. main.py lifespan 移除 create_all 建表逻辑（保留 engine.dispose()），
+     删除不再使用的 Base / models 导入；表结构升级改为显式执行
+     alembic upgrade head（不随应用启动自动跑，避免生产多实例并发迁移）。
+
+  5. tests/conftest.py 测试库有意保留 create_all（不走迁移）：建表快、
+     与业务代码同步、隔离性好，且规避 SQLite/MySQL 方言差异对迁移脚本的
+     干扰；迁移脚本正确性由对真实 MySQL 的验证保证。
+
+【版本策略】
+  - 全新环境：alembic upgrade head 从零建库；
+  - 已有数据的环境（如本地 recruitment 库）：执行一次 alembic stamp head
+    把当前库标记到基线版本（只新增 alembic_version 表，不动数据），
+    之后模型再改动时 alembic revision --autogenerate 生成增量迁移。
+
+【验证】
+  1. 空库建库：临时 SQLite 与临时 MySQL 库（recruitment_alembic_check，
+     验证后已删除）分别执行 alembic upgrade head 成功建出全部表；
+  2. 一致性：对迁移建出的库再次 autogenerate，SQLite 与 MySQL 均为空 diff
+     （迁移产物与 ORM 元数据一致）；
+  3. 已有库：recruitment 库 stamp head 成功，alembic_version = 02767e84e64c；
+  4. pytest 全量 51 个用例通过；
+  5. 应用 lifespan 启动/关闭正常（不再执行建表）。
+
+
+------------------------------------------------------------
+问题 16（P1 · 安全性）：JWT 过期时间使用本地时间，有效期失控
+------------------------------------------------------------
+日期：2026-08-31
+【文件】auth.py  create_access_token 函数
+        （代码中以 【修复】 注释标识）
+
+【问题描述】
+  exp 使用本地 naive 时间 datetime.now()，而 python-jose 编码 datetime 时
+  会把它当作 UTC。东八区下 token 的实际有效期约为 配置值 + 8 小时：
+  实测配置 60 分钟的 token，真实有效期约 540 分钟。登录凭证有效期失控。
+
+【问题原因】
+  naive datetime 被按 UTC 编码，本地时区偏移被叠加进 exp。
+
+【解决方法】
+  改为带时区的 UTC 时间：datetime.now(timezone.utc) + timedelta(minutes=EXPIRE_MINUTES)。
+
+【验证】
+  新增 test_token_expiry_encoded_as_utc：解码 exp 后与
+  "当前 UTC 时刻 + EXPIRE_MINUTES" 比对，误差 < 2 分钟
+  （修复前该断言偏差约 8 小时）。
+
+------------------------------------------------------------
+问题 17（P1 · 严重 bug）：删除有投递记录的岗位返回 500
+------------------------------------------------------------
+【文件】jobs.py  delete_job 函数
+
+【问题描述】
+  application.job_id 外键默认 RESTRICT，岗位一旦存在投递记录，
+  delete_job 提交时撞外键抛 IntegrityError，此前未捕获 → 500。
+  而"岗位被投递过"是招聘系统的常态，删除功能基本不可用。
+
+【问题原因】
+  未处理外键约束失败，也未定义级联删除策略。
+
+【解决方法】
+  捕获 IntegrityError 后 rollback，返回 400 "该岗位已有投递记录，无法删除"。
+  有意不做级联删除：静默删掉学生的投递记录会造成数据丢失，生产上应
+  优先选择"下架/关闭岗位"语义。
+
+【验证】
+  test_delete_job_with_applications_returns_400（400 且岗位仍存在）；
+  test_delete_job_without_applications_succeeds（无投递仍可正常 204 删除）。
+
+------------------------------------------------------------
+问题 18（P1 · 并发安全）：注册与更新岗位存在唯一约束竞态，未兜底
+------------------------------------------------------------
+【文件】auth.py  register 函数；jobs.py  update_job 函数
+
+【问题描述】
+  与问题 13 的投递竞态同款模式，但当时未覆盖到这两处：
+  1. register 先 SELECT 查重再 INSERT，并发注册同名用户时第二个请求
+     撞 username 唯一约束抛 IntegrityError → 500；
+  2. update_job 把岗位改名为同一 HR 已发布的同名岗位时，撞
+     uq_job_hr_title 唯一约束 → 500。
+
+【问题原因】
+  应用层查重不是原子操作；唯一约束兜底只加在了 apply_job / create_job。
+
+【解决方法】
+  两处统一按 apply_job 的既有模式兜底：commit 捕获 IntegrityError →
+  rollback → 返回 400（"用户名已存在" / "你已发布过同名岗位"）。
+
+【验证】
+  test_register_duplicate_race：asyncio.gather 并发注册同名用户，
+  恰为 201 + 400 各一个，无 500；
+  test_update_job_duplicate_title_returns_400：改名撞名返回 400。
+
+------------------------------------------------------------
+问题 19（P1 · 严重 bug）：字符串字段无长度上限，超长输入返回 500
+------------------------------------------------------------
+【文件】schemas.py  UserCreate、JobCreate
+
+【问题描述】
+  username / name / email / title / description / requirements 均无
+  max_length，而数据库列为 VARCHAR(80/100/120/1000)。MySQL 严格模式下
+  超长插入抛 DataError → 500，而非 422。
+
+【问题原因】
+  Pydantic 层缺少与数据库列宽对应的长度约束，超长输入穿透到数据库。
+
+【解决方法】
+  各字段补充 Field(max_length=...)，上限与 models.py 列宽一一对齐
+  （username/name: 80，email: 120，title: 100，description/requirements: 1000）。
+  说明：Pydantic 的 max_length 按字符计，MySQL VARCHAR(n) 同样按字符计，
+  两者语义一致；必填字段同时补 min_length=1 拦截空串。
+
+【验证】
+  test_register_username_too_long_returns_422（81 字符 → 422）；
+  test_create_job_title_too_long_returns_422（101 字符 → 422）；
+  test_create_job_description_too_long_returns_422（1001 字符 → 422）。
+
+------------------------------------------------------------
+问题 20（P2 · 严重 bug）：超 72 字节密码注册返回 500
+------------------------------------------------------------
+【文件】schemas.py  UserCreate.password_strength
+
+【问题描述】
+  密码校验只有下限没有上限。bcrypt 5.0 对超过 72 字节的密码会抛
+  ValueError（实测确认），注册/登录超长密码直接 500。
+
+【问题原因】
+  bcrypt 算法本身只取前 72 字节，python bcrypt 库 4.0+ 对超长输入
+  显式抛错，而 schema 未限制上限。
+
+【解决方法】
+  密码强度校验器最前面增加按"字节"的上限检查：
+  len(v.encode('utf-8')) > 72 → 422（按字节而非字符，兼顾中文等多字节字符）。
+
+【验证】
+  test_register_password_over_72_bytes_returns_422：60 个中文字符
+  （180 字节）→ 422。
+
+------------------------------------------------------------
+改进 21（工程化）：全局异常兜底 + 日志、CI、死代码清理
+------------------------------------------------------------
+【文件】main.py、.github/workflows/ci.yml（新增）、schemas.py、auth.py
+        （代码中以 【新增】/【清理】 注释标识）
+
+【内容】
+  1. main.py 配置全局 logging（统一格式），并注册 Exception 级
+     异常处理器：完整堆栈写入日志，客户端只收到统一 500 文案，
+     避免泄露内部细节（此前 500 会透出异常信息）。
+  2. 新增 GitHub Actions CI（.github/workflows/ci.yml）：
+     - test job：pip install 后跑全量 pytest（SQLite，无需 MySQL 服务）；
+     - migrations job：对空 SQLite 库 alembic upgrade head 建库，
+       再 alembic check 校验迁移脚本与 ORM 模型一致（空 diff 才算通过），
+       把迁移正确性纳入持续集成。
+  3. 清理死代码：删除 schemas.py 中从未使用的 UserLogin 模型
+     （登录走 OAuth2PasswordRequestForm 表单），同步移除 auth.py 的无效导入。
+
+【验证】
+  pytest 全量 60 个用例通过（新增 9 个回归用例，tests/test_fixes.py）；
+  应用导入与 lifespan 启动正常；alembic check 本地验证输出
+  "No new upgrade operations detected."。

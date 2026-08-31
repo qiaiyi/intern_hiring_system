@@ -1,15 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm  # 新增导入
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from jose import jwt
 import bcrypt
 
-from database import get_db_session
-from models import User
-from schemas import UserCreate, UserLogin, UserOut, Token
-from config import SECRET_KEY, ALGORITHM, EXPIRE_MINUTES
+from app.core.config import SECRET_KEY, ALGORITHM, EXPIRE_MINUTES
+from app.db.database import get_db_session
+from app.models import User
+from app.schemas import UserCreate, UserOut, Token  # 【清理】UserLogin 从未使用，登录走 OAuth2 表单
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -24,7 +25,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.now() + timedelta(minutes=EXPIRE_MINUTES)
+    # 【修复】exp 必须用 UTC 时间：python-jose 编码 naive datetime 时会把它当作 UTC，
+    # 此前用本地时间 datetime.now()，东八区下 token 实际有效期比配置长约 8 小时
+    expire = datetime.now(timezone.utc) + timedelta(minutes=EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -45,7 +48,14 @@ async def register(user_data: UserCreate, db_session: AsyncSession = Depends(get
         email=user_data.email,
     )
     db_session.add(user)
-    await db_session.commit()
+    # 【修复】并发注册同名用户的竞态兜底（与问题 13 的投递去重同思路）：
+    # 两个请求都通过上面的查重后，第二个 INSERT 会撞 username 唯一约束
+    # 抛 IntegrityError，这里捕获并回滚返回 400，避免 500。
+    try:
+        await db_session.commit()
+    except IntegrityError:
+        await db_session.rollback()
+        raise HTTPException(status_code=400, detail="用户名已存在")
     await db_session.refresh(user)
     return user
 

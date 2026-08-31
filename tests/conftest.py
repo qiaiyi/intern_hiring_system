@@ -5,13 +5,17 @@
 - 每个用例独立建库，保证用例间数据隔离；
 - 通过 app.dependency_overrides 把 get_db_session 指向测试会话工厂，
   使被测接口在不改动业务代码的前提下使用测试数据库。
+- 【Alembic迁移】测试库有意继续使用 create_all（不走 Alembic 迁移）：
+  建表更快、与业务代码同步、隔离性好，且规避 SQLite/MySQL 方言差异
+  对迁移脚本的干扰；迁移脚本正确性由对真实 MySQL 的 upgrade/stamp 验证保证。
 """
 import pytest_asyncio
 import httpx
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
-from main import app
-from database import Base, get_db_session
+from app.main import app
+from app.db.base import Base
+from app.db.database import get_db_session
 
 
 @pytest_asyncio.fixture

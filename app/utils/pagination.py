@@ -4,7 +4,7 @@ from math import ceil
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from schemas import PageParams
+from app.schemas import PageParams
 
 
 async def paginate(db_session: AsyncSession, stmt, params: PageParams):

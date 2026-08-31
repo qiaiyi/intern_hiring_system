@@ -6,11 +6,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from database import get_db_session
-from models import Application, Job, User
-from schemas import ApplicationOut, ApplicationStatusUpdate, Page, PageParams
-from dependencies import get_current_user, require_role
-from pagination import paginate, build_page
+from app.db.database import get_db_session
+from app.models import Application, Job, User
+from app.schemas import ApplicationOut, ApplicationStatusUpdate, Page, PageParams
+from app.api.dependencies import get_current_user, require_role
+from app.utils.pagination import paginate, build_page
 
 router = APIRouter(prefix="/api", tags=["applications"])
 

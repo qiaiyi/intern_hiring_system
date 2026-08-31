@@ -1,0 +1,49 @@
+# 【新增】CI：每次 push / PR 自动跑全量测试，并验证 Alembic 迁移与模型一致。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 运行测试（SQLite，无需真实 MySQL）
+        run: pytest -q
+
+  migrations:
+    # 迁移一致性检查：对空库 upgrade head 建出全部表后，
+    # alembic check 应报告"无待应用的变更"（迁移脚本与 ORM 模型一致）。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 空库执行迁移
+        env:
+          DATABASE_URL: sqlite+aiosqlite:///./ci_migrations.db
+        run: alembic upgrade head
+
+      - name: 校验迁移与模型一致（空 diff）
+        env:
+          DATABASE_URL: sqlite+aiosqlite:///./ci_migrations.db
+        run: alembic check

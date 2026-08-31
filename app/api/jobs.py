@@ -5,11 +5,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from database import get_db_session
-from models import Job, User
-from schemas import JobCreate, JobOut, Page, PageParams
-from dependencies import get_current_user, require_role
-from pagination import paginate, build_page
+from app.db.database import get_db_session
+from app.models import Job, User
+from app.schemas import JobCreate, JobOut, Page, PageParams
+from app.api.dependencies import get_current_user, require_role
+from app.utils.pagination import paginate, build_page
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -85,7 +85,13 @@ async def update_job(
     job.title = job_data.title
     job.description = job_data.description
     job.requirements = job_data.requirements
-    await db_session.commit()
+    # 【修复】改名为同名岗位时 INSERT/UPDATE 撞 uq_job_hr_title 唯一约束
+    # 抛 IntegrityError，捕获并回滚返回 400，避免 500（与 create_job 的兜底一致）。
+    try:
+        await db_session.commit()
+    except IntegrityError:
+        await db_session.rollback()
+        raise HTTPException(status_code=400, detail="你已发布过同名岗位")
     await db_session.refresh(job)
     return job
 
@@ -104,5 +110,15 @@ async def delete_job(
         raise HTTPException(status_code=403, detail="只能删除自己发布的岗位")
 
     await db_session.delete(job)
-    await db_session.commit()
+    # 【修复】岗位已有投递记录时，application.job_id 外键（默认 RESTRICT）
+    # 会阻止删除并抛 IntegrityError，此前未捕获导致 500。
+    # 这里捕获并回滚，返回 400 提示先处理投递记录（不做级联删除，避免静默丢数据）。
+    try:
+        await db_session.commit()
+    except IntegrityError:
+        await db_session.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="该岗位已有投递记录，无法删除",
+        )
     return None  # 204 响应无内容

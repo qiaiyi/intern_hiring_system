@@ -1,32 +1,39 @@
-# 实习招聘管理系统 API
+# 实习招聘管理系统
 
-一个基于 FastAPI + SQLAlchemy 的实习招聘系统后端，提供用户注册/登录、岗位发布、岗位投递与投递状态管理等接口。
+一个基于 FastAPI + SQLAlchemy 的实习招聘系统，后端提供用户注册/登录、岗位发布、岗位投递与投递状态管理等接口，前端基于 Streamlit 实现登录注册、岗位浏览与发布、投递管理。
 
 ## 技术栈
 
-- **Web 框架**：FastAPI
-- **ORM**：SQLAlchemy（异步）
+- **后端框架**：FastAPI（异步）
+- **ORM**：SQLAlchemy 2.0（异步，aiomysql / aiosqlite）
+- **数据库迁移**：Alembic（async 模板）
 - **数据库**：MySQL（生产）/ SQLite（测试）
 - **认证**：JWT（python-jose）+ bcrypt 密码哈希
 - **校验**：Pydantic v2
+- **前端**：Streamlit + requests
 - **测试**：pytest + pytest-asyncio + httpx
 
 ## 目录结构
 
 ```
 .
-├── main.py            # 应用入口，注册路由与 CORS 中间件
-├── config.py          # 环境变量加载与启动校验
-├── database.py        # 异步引擎、会话工厂
-├── models.py          # SQLAlchemy 模型（User / Job / Application）
-├── schemas.py         # Pydantic 请求/响应模型
-├── auth.py            # 注册、登录、JWT 签发
-├── jobs.py            # 岗位 CRUD
-├── applications.py    # 投递与状态管理
-├── dependencies.py    # 依赖注入（当前用户、角色校验）
-├── pagination.py      # 通用分页工具
-├── tests/             # 单元测试
-└── requirements.txt   # 锁定版本的依赖清单
+├── app/                    # 后端包
+│   ├── main.py             # 应用入口，注册路由与 CORS 中间件（不含建表逻辑）
+│   ├── core/               # config.py（环境变量加载与启动校验）
+│   ├── db/                 # database.py（异步引擎/会话工厂）、base.py（声明式基类）
+│   ├── models/             # SQLAlchemy 模型（user.py / job.py / application.py）
+│   ├── schemas/            # Pydantic 模型（common.py / user.py / job.py / application.py）
+│   ├── api/                # auth.py（注册/登录/JWT）、jobs.py（岗位 CRUD）、
+│   │                       # applications.py（投递与状态管理）、dependencies.py（依赖注入）
+│   └── utils/              # pagination.py（通用分页工具）
+├── migrations/             # Alembic 迁移环境与版本脚本
+├── frontend/               # Streamlit 前端
+│   ├── streamlit_app.py    # 入口页（登录 / 注册）
+│   ├── api_client.py       # 后端 API 封装
+│   └── pages/              # 岗位浏览/发布、投递管理等页面
+├── tests/                  # 单元测试
+├── alembic.ini             # Alembic 配置（连接串由 env.py 从 .env 注入）
+└── requirements.txt        # 锁定版本的依赖清单
 ```
 
 ## 快速开始
@@ -62,18 +69,62 @@ cp .env.example .env
 
 > 注意：`DATABASE_URL` 与 `SECRET_KEY` 缺失时应用会在启动时报错并退出（fail-fast）。
 
-### 3. 启动
+### 3. 初始化数据库（Alembic 迁移）
 
-应用启动时会自动建表（`create_all`），无需手动建库。
+表结构统一由 Alembic 管理，应用启动时**不再自动建表**：
 
 ```bash
-uvicorn main:app --reload
+# 全新空库：执行迁移，从零建出全部表
+alembic upgrade head
+
+# 已有数据的老库（升级前已用 create_all 建过表）：只需标记基线版本，
+# 不会改动任何数据，之后即可正常使用增量迁移
+alembic stamp head
+```
+
+### 4. 启动
+
+```bash
+# 后端 API
+uvicorn app.main:app --reload
+
+# Streamlit 前端（新开终端，在 frontend/ 目录下）
+cd frontend
+streamlit run streamlit_app.py
 ```
 
 启动后访问：
 
 - 接口文档（Swagger UI）：http://localhost:8000/docs
 - 接口文档（ReDoc）：http://localhost:8000/redoc
+- Streamlit 前端：http://localhost:8501
+
+## 数据库迁移（Alembic）
+
+表结构的演进流程：
+
+```bash
+# 1. 修改 app/models/ 下的模型后，自动生成增量迁移脚本
+alembic revision --autogenerate -m "描述本次改动"
+
+# 2. 人工检查 migrations/versions/ 下新生成的脚本（确认无误后再执行）
+
+# 3. 应用到数据库
+alembic upgrade head
+
+# 其他常用命令
+alembic history              # 查看迁移历史
+alembic current              # 查看当前库所在的版本
+alembic downgrade -1         # 回滚上一个版本
+alembic stamp head           # 已有库（非迁移建出）标记基线，不动数据
+```
+
+说明：
+
+- 数据库连接串复用 `.env` 中的 `DATABASE_URL`，由 `migrations/env.py` 注入，`alembic.ini` 中不存放密码。
+- 迁移连接与项目一致使用异步驱动（async 模板）。
+- 测试库（`tests/conftest.py`）有意继续使用 `create_all`：建表快、与业务代码同步，且规避 SQLite/MySQL 方言差异对迁移脚本的干扰；迁移脚本正确性以真实 MySQL 的验证为准。
+- 修改 `alembic.ini` 时请保持纯 ASCII：Alembic 按系统区域编码（中文 Windows 为 GBK）读取该文件，写中文注释会导致解码失败。
 
 ## API 概览
 
@@ -101,11 +152,11 @@ uvicorn main:app --reload
 | 方法 | 路径 | 说明 | 权限 |
 |------|------|------|------|
 | POST | `/api/jobs/{job_id}/apply` | 投递岗位 | 学生 |
-| GET | `/api/my/applications` | 我的投递记录（分页） | 学生 |
-| GET | `/api/jobs/{job_id}/applications` | 岗位投递列表（分页） | 发布者 HR |
+| GET | `/api/my/applications` | 我的投递记录（分页，含岗位/投递人摘要） | 学生 |
+| GET | `/api/jobs/{job_id}/applications` | 岗位投递列表（分页，含投递人姓名/邮箱） | 发布者 HR |
 | PUT | `/api/applications/{application_id}` | 更新投递状态 | 发布者 HR |
 
-投递状态流转：`applied` → `screening` → `interview` → `offer` / `rejected`（`applied` 为投递初始态，HR 不可将其改回）。
+投递状态流转：`applied` → `screening` → `interview` → `offer` / `rejected`（`applied` 为投递初始态，HR 不可将其改回，非法状态值由枚举校验拦截返回 422）。
 
 ### 分页约定
 
@@ -121,7 +172,7 @@ uvicorn main:app --reload
 }
 ```
 
-通过查询参数 `page`（默认 1）、`page_size`（默认 10，最大 100）控制。
+通过查询参数 `page`（默认 1）、`page_size`（默认 10，最大 100）控制，非法值返回 422。
 
 ## 运行测试
 
@@ -131,9 +182,28 @@ pytest
 
 测试使用 SQLite（aiosqlite）作为文件数据库，通过 `dependency_overrides` 注入测试会话，无需真实 MySQL 服务。
 
+## 更新记录
+
+### 2026-08-31
+
+- **引入 Alembic 数据库迁移**（改进 15）：移除启动时 `create_all` 自动建表，表结构统一由 `migrations/` 版本脚本管理，支持增量升级与回滚；生成基线迁移 `02767e84e64c`，已有库通过 `alembic stamp head` 标记基线。详见《后端问题修复记录.txt》。
+- **一批安全与健壮性修复**（问题 16-20）：JWT `exp` 改用 UTC（此前东八区下 token 实际有效期约为配置的 9 倍）；删除有投递记录的岗位返回 400（此前 500）；注册与更新岗位补并发唯一约束兜底（此前 500）；全部字符串字段补长度上限、密码补 72 字节上限（超长此前均为 500，现 422）。
+- **工程化**（改进 21）：全局异常兜底（堆栈进日志、客户端只见统一 500 文案）+ logging 配置；新增 GitHub Actions CI（全量测试 + Alembic 空库迁移/一致性检查）；清理未使用的 `UserLogin` 模型。
+
+### 2026-08-26 前后（问题修复批次，详见《后端问题修复记录.txt》）
+
+- **新增 Streamlit 前端**：登录/注册入口页与岗位浏览、岗位发布、投递管理等页面；后端岗位发布增加 `(hr_id, title)` 数据库唯一约束（`uq_job_hr_title`）兜底并发防重。
+- **投递与用户模型完善**（问题 13/14）：投递增加 `(job_id, student_id)` 唯一约束 `uq_application_job_student` 修复并发重复投递竞态，外键列补索引；投递列表返回岗位/投递人摘要（relationship 预加载），User 增加 `name` / `email` 字段。
+- **分页功能**（问题 6/7）：三个列表接口统一分页（`Page[T]` 响应结构 + 通用分页工具），并修复非法分页参数返回 500 的问题（现返回 422）。
+- **安全加固**（问题 1/4/5/8/11/12）：修复 JWT 缺 `sub` 时 500 错误（现返回 401）；新增 CORS 中间件并将来源白名单环境变量化；`DATABASE_URL` / `SECRET_KEY` 启动时 fail-fast 校验；注册密码强度校验（至少 8 位、含字母和数字）；依赖补齐 `python-multipart`。
+- **工程规范**（问题 2/3/9/10）：投递状态枚举化校验；清理死代码；新增 `.env.example` 模板；requirements.txt 锁定全部依赖版本。
+
 ## 说明
 
-- 密码强度校验：至少 8 位，且同时包含字母与数字。
-- 同一学生对同一岗位仅可投递一次（数据库唯一约束 + 应用层校验双重保证）。
+- 密码强度校验：8~72 字节，且同时包含字母与数字；各字符串字段有长度上限（与数据库列宽一致），超限返回 422。
+- 同一学生对同一岗位仅可投递一次（数据库唯一约束 + 应用层校验双重保证）；同一 HR 不能发布同名岗位。
+- JWT 过期时间按 UTC 编码，默认 60 分钟。
 - CORS 默认允许本地开发端口；生产环境请在 `.env` 中将 `CORS_ORIGINS` 设为真实前端域名。
-- 生产部署建议引入 Alembic 做数据库迁移（当前使用启动时 `create_all`，不会修改已有表结构）。
+- 数据库表结构变更必须走 Alembic 迁移（见上文「数据库迁移」章节），不要再用删表重建的方式。
+- 未处理的异常会记录完整堆栈到日志，客户端只收到统一的 `{"detail": "服务器内部错误"}`。
+- push / PR 会触发 GitHub Actions CI：全量 pytest + Alembic 迁移一致性检查（见 `.github/workflows/ci.yml`）。

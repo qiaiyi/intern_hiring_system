@@ -1,6 +1,6 @@
 """auth 接口测试：注册、登录、JWT 解析与认证边界。"""
 import helpers
-from auth import create_access_token
+from app.api.auth import create_access_token
 
 
 async def test_register_default_role_student(client):
