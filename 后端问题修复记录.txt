@@ -700,3 +700,46 @@
   pytest 全量 60 个用例通过（新增 9 个回归用例，tests/test_fixes.py）；
   应用导入与 lifespan 启动正常；alembic check 本地验证输出
   "No new upgrade operations detected."。
+
+
+------------------------------------------------------------
+改进 22（重构）：后端代码包化为 app/ 目录
+------------------------------------------------------------
+日期：2026-09-01
+【文件】app/（新增包）、原根目录 10 个 py 文件（git mv 迁移）、
+        migrations/env.py、tests/、README.md
+        （使用 git mv 迁移，保留文件历史）
+
+【问题描述】
+  后端 13 个 py 文件全部平铺在根目录，与 frontend/、migrations/、tests/
+  混在一起，项目规模增长后根目录持续膨胀，职责边界不清晰。
+
+【解决方法】
+  按标准 FastAPI 布局包化，按功能划分、不额外引入 service/repository 层
+  （3 个业务模块体量不需要，避免过度分层）：
+
+    app/
+    ├── main.py            # 入口
+    ├── core/config.py     # 配置
+    ├── db/                # base.py（声明式基类）、database.py（引擎/会话）
+    ├── models/            # user.py / job.py / application.py（按实体拆分）
+    ├── schemas/           # common.py / user.py / job.py / application.py，
+    │                      # __init__.py 统一 re-export，路由层不感知拆分
+    ├── api/               # auth / jobs / applications / dependencies
+    └── utils/pagination.py
+
+  配套修改：
+  - 全部 import 改为 app.* 绝对导入；
+  - migrations/env.py 改从 app.core.config / app.db.base / app.models 导入；
+  - pytest.ini 的 pythonpath=. 保持不变，tests/ 导入同步更新；
+  - 启动命令改为 uvicorn app.main:app；
+  - CI 的 actions/checkout 升 v5、actions/setup-python 升 v6，
+    消除 Node.js 20 deprecation 警告。
+
+【验证】
+  pytest 全量 60 个用例通过；空库 alembic upgrade head + alembic check
+  通过（No new upgrade operations detected.）；uvicorn app.main:app
+  导入与 lifespan 启动正常。
+  经验教训：本次重构中途推送曾导致 CI 两个 job 失败（exit 4 / exit 1，
+  模块导入不到），应在重构完整收尾后再提交推送——测试与 CI 的价值
+  恰在于此，push 后 1 分钟内即暴露问题。
