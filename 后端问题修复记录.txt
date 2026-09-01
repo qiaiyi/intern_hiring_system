@@ -743,3 +743,9 @@
   经验教训：本次重构中途推送曾导致 CI 两个 job 失败（exit 4 / exit 1，
   模块导入不到），应在重构完整收尾后再提交推送——测试与 CI 的价值
   恰在于此，push 后 1 分钟内即暴露问题。
+
+  【补充 2026-09-01】CI 首跑暴露的问题与修复：
+  config.py 的 fail-fast 校验（DATABASE_URL / SECRET_KEY 缺失即退出）在 CI
+  环境触发——CI 没有 .env（也不应提交）。修复：ci.yml 两个 job 注入仅 CI 用的
+  占位环境变量（SECRET_KEY 为占位值，不可用于生产），并在本地移走 .env 模拟
+  CI 环境验证：60 个用例 + alembic upgrade/check 全部通过。

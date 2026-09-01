@@ -21,6 +21,11 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: 运行测试（SQLite，无需真实 MySQL）
+        env:
+          # CI 环境没有 .env，config.py 的 fail-fast 校验要求这两个变量存在；
+          # 测试不校验密钥强度，给占位值即可（不可用于生产）
+          DATABASE_URL: sqlite+aiosqlite:///./ci_test.db
+          SECRET_KEY: ci-only-placeholder-secret-key
         run: pytest -q
 
   migrations:
@@ -41,9 +46,11 @@ jobs:
       - name: 空库执行迁移
         env:
           DATABASE_URL: sqlite+aiosqlite:///./ci_migrations.db
+          SECRET_KEY: ci-only-placeholder-secret-key  # config.py fail-fast 校验需要
         run: alembic upgrade head
 
       - name: 校验迁移与模型一致（空 diff）
         env:
           DATABASE_URL: sqlite+aiosqlite:///./ci_migrations.db
+          SECRET_KEY: ci-only-placeholder-secret-key
         run: alembic check
