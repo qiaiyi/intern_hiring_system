@@ -749,3 +749,50 @@
   环境触发——CI 没有 .env（也不应提交）。修复：ci.yml 两个 job 注入仅 CI 用的
   占位环境变量（SECRET_KEY 为占位值，不可用于生产），并在本地移走 .env 模拟
   CI 环境验证：60 个用例 + alembic upgrade/check 全部通过。
+
+
+------------------------------------------------------------
+改进 23（部署）：Docker Compose 容器化（mysql + backend + frontend）
+------------------------------------------------------------
+日期：2026-09-01
+【文件】Dockerfile（新增，后端）、frontend/Dockerfile（新增）、
+        docker-compose.yml（新增）、.dockerignore（新增）、
+        frontend/.dockerignore（新增）、.env.example
+        （相关文件中以 【Docker部署】 注释标识）
+
+【问题描述】
+  此前运行项目需要手工搭环境：装 Python、装依赖、装 MySQL、配 .env、
+  alembic 建表、分别启动后端与前端，步骤多且换机器难以复现。
+
+【解决方法】
+  1. 后端镜像（根目录 Dockerfile）：python:3.11-slim 底座，先复制
+     requirements.txt 单独安装以利用层缓存；仅复制 app/、alembic.ini、
+     migrations/（.dockerignore 排除 .venv/.git/tests/frontend 等）。
+     启动命令：alembic upgrade head（自动迁移）成功后 exec uvicorn
+     app.main:app --host 0.0.0.0。
+  2. 前端镜像（frontend/Dockerfile）：同底座，安装 streamlit/requests，
+     监听 0.0.0.0:8501；通过环境变量 API_BASE_URL=http://backend:8000
+     指向 compose 内网后端（api_client.py 原生支持该变量，零代码改动）。
+  3. docker-compose.yml 三服务编排：
+     - mysql:8.0：数据卷 mysql_data 持久化；不向宿主机暴露 3306（内网隔离）；
+       healthcheck 用 mysqladmin ping 判定就绪；
+     - backend：depends_on service_healthy 等 MySQL 就绪；DATABASE_URL
+       指向 mysql:3306；SECRET_KEY / MYSQL_ROOT_PASSWORD 从 .env 注入
+       （缺失时 compose 直接报错，:? 语法 fail-fast）；
+     - frontend：端口 8501:8501。
+  4. .env.example 补充 MYSQL_ROOT_PASSWORD 及 Docker 部署说明。
+
+【踩坑记录】
+  MySQL 容器首次初始化数据目录后会内部重启一次，compose 的健康检查在
+  重启前即可通过，后端恰在重启窗口执行迁移 → ConnectionRefused 退出。
+  修复：迁移命令加有界重试（最多 30 次 x 2 秒），重试期间打印等待日志；
+  超限仍失败则退出（不无限掩盖真实配置错误）。
+
+【验证】
+  docker compose up -d --build 三容器全部 Up（mysql healthy）；
+  后端日志确认 alembic 迁移执行（Running upgrade -> 02767e84e64c）与
+  uvicorn 启动；全链路功能验证通过：注册 HR/学生（201）→ 登录双 token →
+  HR 发布岗位（201）→ 学生投递（201，含岗位/投递人嵌套信息）→
+  HR 查看投递列表（total=1）→ 学生查我的投递（total=1）→
+  前端 http://localhost:8501 返回 200。
+  容器 MySQL 为全新空库，与本机 MySQL / 现有 recruitment 库互不影响。

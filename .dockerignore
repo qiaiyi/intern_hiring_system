@@ -1,0 +1,17 @@
+# 【Docker部署】构建上下文排除清单：这些文件不进入镜像层，加速构建并避免敏感信息入库
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.github/
+.pytest_cache/
+.env
+.env.bak
+tests/
+frontend/
+migrations/versions/__pycache__/
+后端问题修复记录.txt
+README.md
+_ci_*.db
+*.db

@@ -1,0 +1,57 @@
+# 【Docker部署】三服务编排：mysql（数据卷持久化）→ backend（启动时自动 alembic 迁移）→ frontend
+# 用法：docker compose up -d --build   （首次构建较慢，之后利用层缓存）
+# 停止：docker compose down            （数据保留在卷里；加 -v 才会删数据）
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: recruitment-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: recruitment   # 容器首次启动自动创建空库，后端迁移负责建表
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql_data:/var/lib/mysql
+    # 【Docker部署】不对宿主机暴露 3306：数据库只供 compose 内网访问，减小攻击面。
+    # 如需在宿主机用 Navicat 等工具连，取消下面两行注释即可
+    # ports:
+    #   - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: recruitment-backend
+    environment:
+      # compose 内网域名是服务名 mysql；aiomysql 为异步驱动
+      DATABASE_URL: mysql+aiomysql://root:${MYSQL_ROOT_PASSWORD}@mysql:3306/recruitment
+      SECRET_KEY: ${SECRET_KEY:?请在 .env 中设置 SECRET_KEY}
+      SQL_ECHO: "false"
+      # CORS：Streamlit 的请求由其服务端转发，不经浏览器跨域，此处保留默认即可
+      CORS_ORIGINS: http://localhost:8501
+    ports:
+      - "8000:8000"   # 宿主机访问 Swagger：http://localhost:8000/docs
+    depends_on:
+      mysql:
+        condition: service_healthy   # 等 MySQL 真正就绪再启动，避免迁移连接被拒
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: recruitment-frontend
+    environment:
+      # 指向 compose 内网的后端服务（服务名即域名），api_client.py 读此变量
+      API_BASE_URL: http://backend:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
+
+volumes:
+  mysql_data:

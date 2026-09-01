@@ -174,6 +174,34 @@ alembic stamp head           # 已有库（非迁移建出）标记基线，不�
 
 通过查询参数 `page`（默认 1）、`page_size`（默认 10，最大 100）控制，非法值返回 422。
 
+## Docker 部署（一键启动）
+
+项目提供完整的容器化方案：MySQL、后端 API、Streamlit 前端各一个容器，由 Docker Compose 编排。
+
+```bash
+# 1. 在 .env 中设置两个变量（缺少时 compose 会拒绝启动）：
+#    SECRET_KEY=xxx                    # JWT 签名密钥
+#    MYSQL_ROOT_PASSWORD=xxx           # MySQL 容器 root 密码（仅容器内新库使用）
+
+# 2. 构建并启动全部三个服务
+docker compose up -d --build
+
+# 3. 访问
+#    前端：http://localhost:8501
+#    接口文档：http://localhost:8000/docs
+
+# 停止（数据保留在卷里，下次 up 继续用）
+docker compose down
+```
+
+说明：
+
+- **自动迁移**：后端容器启动时先执行 `alembic upgrade head` 再启动 uvicorn，空库自动建表；迁移带 2 秒间隔的有界重试（最多 30 次），规避 MySQL 首次初始化重启窗口的连接竞态。
+- **数据持久化**：MySQL 数据存在命名卷 `mysql_data` 中，`docker compose down` 不丢数据（`down -v` 才会删除）。
+- **网络安全**：MySQL 容器不向宿主机暴露端口，只在 compose 内网供后端访问；如需用数据库客户端连接，在 `docker-compose.yml` 中取消 ports 注释。
+- **容器互联**：前端通过 `API_BASE_URL=http://backend:8000` 访问后端（compose 服务名即内网域名），后端通过 `mysql:3306` 访问数据库。
+- 容器里的 MySQL 是全新空库，与你本机安装的 MySQL、现有数据互不影响；两种方式可以并存（本地开发用本机库，演示用 Docker）。
+
 ## 运行测试
 
 ```bash
@@ -190,6 +218,7 @@ pytest
 - **一批安全与健壮性修复**（问题 16-20）：JWT `exp` 改用 UTC（此前东八区下 token 实际有效期约为配置的 9 倍）；删除有投递记录的岗位返回 400（此前 500）；注册与更新岗位补并发唯一约束兜底（此前 500）；全部字符串字段补长度上限、密码补 72 字节上限（超长此前均为 500，现 422）。
 - **工程化**（改进 21）：全局异常兜底（堆栈进日志、客户端只见统一 500 文案）+ logging 配置；新增 GitHub Actions CI（全量测试 + Alembic 空库迁移/一致性检查）；清理未使用的 `UserLogin` 模型。
 - **项目结构重构**（改进 22）：后端 13 个平铺文件包化为 `app/`（core / db / models / schemas / api / utils，模型与 schema 按业务实体拆分），`git mv` 保留文件历史；CI 的 actions 版本升至 v5/v6。60 个测试 + 迁移一致性检查全绿。
+- **Docker 容器化部署**（改进 23）：新增后端/前端 Dockerfile 与 `docker-compose.yml`（mysql + backend + frontend 三服务），MySQL 数据卷持久化、健康检查编排、后端启动时自动执行 Alembic 迁移（带连接竞态重试）；`docker compose up -d --build` 一键启动全栈并完成全链路功能验证。
 
 ### 2026-08-26 前后（问题修复批次，详见《后端问题修复记录.txt》）
 
