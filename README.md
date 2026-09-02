@@ -201,6 +201,7 @@ docker compose down
 - **网络安全**：MySQL 容器不向宿主机暴露端口，只在 compose 内网供后端访问；如需用数据库客户端连接，在 `docker-compose.yml` 中取消 ports 注释。
 - **容器互联**：前端通过 `API_BASE_URL=http://backend:8000` 访问后端（compose 服务名即内网域名），后端通过 `mysql:3306` 访问数据库。
 - 容器里的 MySQL 是全新空库，与你本机安装的 MySQL、现有数据互不影响；两种方式可以并存（本地开发用本机库，演示用 Docker）。
+- Docker 相关概念讲解与排障手册见 [Docker部署学习指南.md](Docker部署学习指南.md)（含逐行配置解读、常用命令、故障排查三步法）。
 
 ## 运行测试
 
