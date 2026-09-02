@@ -26,6 +26,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # 【Docker部署】镜像名指向阿里云 ACR（青岛），docker compose build 后可直接 push，
+    # 目标电脑 docker compose pull 即可拉取，无需现场构建
+    image: crpi-boawcxejul83j1fh.cn-qingdao.personal.cr.aliyuncs.com/l-first/recruitment:backend-1.0
     container_name: recruitment-backend
     environment:
       # compose 内网域名是服务名 mysql；aiomysql 为异步驱动
@@ -44,6 +47,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    image: crpi-boawcxejul83j1fh.cn-qingdao.personal.cr.aliyuncs.com/l-first/recruitment:frontend-1.0
     container_name: recruitment-frontend
     environment:
       # 指向 compose 内网的后端服务（服务名即域名），api_client.py 读此变量
